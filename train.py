@@ -25,10 +25,10 @@ class PPOActorCritic(torch.nn.Module):
         x = torch.tanh(self.l3(x))
         x = torch.tanh(self.l4(x))
         out = self.l5(x)
-        mu = out[:self.action_size]
+        mu = out[:, :self.action_size]
         std = torch.exp(self.log_std)
         pi = torch.distributions.normal.Normal(mu, std)
-        value = out[self.action_size]
+        value = out[:, self.action_size]
         if act is None:
             act = pi.sample()
         log_prob = pi.log_prob(act).sum(axis=-1)
@@ -46,7 +46,7 @@ def run_episode(env, model, states, actions, values, log_probs, rewards):
         states[i, :] = torch.from_numpy(env.state[:])
 
         # get action, log prob and value estimate
-        action, log_prob, value = model(torch.from_numpy(env.norm_state))
+        action, log_prob, value = model(torch.unsqueeze(torch.from_numpy(env.norm_state), 0))
 
         # add to the buffers
         actions[i, :] = action[:]
@@ -54,7 +54,6 @@ def run_episode(env, model, states, actions, values, log_probs, rewards):
         values[i] = value
 
         # get the opponent action
-        # combined_actions = np.random.rand(env.action_size * 2) * 2 - 1
         combined_actions = np.zeros(env.action_size * 2, dtype=np.float32)
         combined_actions[2] = random.random() * 2 - 1
         combined_actions[3] = random.random()
@@ -213,4 +212,6 @@ def train():
 
     return
 
-train()
+if __name__ == "__main__":
+    train()
+
