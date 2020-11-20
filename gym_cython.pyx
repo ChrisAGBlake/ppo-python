@@ -6,32 +6,32 @@ cimport cython
 from cpython cimport array
 import array
 import numpy as np
-from config import load_config
 cdef extern from "stdlib.h":
     int RAND_MAX
-cfg = load_config()
 
 # boat boundaries 
-vb = np.array(cfg["virtual_boundary"], dtype=np.float32)
-pb = np.array(cfg["physical_boundary"], dtype=np.float32)
+vb = np.array([[0.0, 10.0, 0.0, -10.0],[12.9, 0.0, -11.0, 0.0]], dtype=np.float32, order='C').T
+pb = np.array([[0.0, 5.0, 0.0, -5.0],[12.9, 0.0, -11.0, 0.0]], dtype=np.float32, order='C').T
+vb = vb.copy(order='C')
+pb = pb.copy(order='C')
 cdef float [:,::1] virtual_boundary = vb
 cdef float [:,::1] physical_boundary = pb
 
 # reward scaling
-cdef float  penalty = cfg["penalty"]
-cdef float  game_penalty = cfg["game_penalty"]
-cdef float  start_penalty = cfg["start_penalty"]
-cdef float  collision_penalty = cfg["collision_penalty"]
-cdef float  final_reward_scale = cfg["final_reward_scale"]
+cdef float  penalty = 0.05
+cdef float  game_penalty = 0.05
+cdef float  start_penalty = 0.05
+cdef float  collision_penalty = 0.01
+cdef float  final_reward_scale = 1
 
 # polar velocity
-data = np.loadtxt(cfg["polar_file"], delimiter=",", dtype=np.float32)
+data = np.loadtxt("polar.csv", delimiter=",", dtype=np.float32)
 cdef float [:,::1] polar = data
-cdef float min_tws = 7.0 * 1852.0 / 3600.0
-cdef float max_tws = 21.0 * 1852.0 / 3600.0
-cdef float tws_step = 2.0 * 1852.0 / 3600.0
+cdef float min_tws = 3.6
+cdef float max_tws = 10.8
+cdef float tws_step = 1.029
 cdef int n_tws = data.shape[0]
-cdef float  v_min = 0.5
+cdef float  v_min =0.5
 cdef float  vmg_cwa = 0.82
 
 # coefficients for acceleration
@@ -45,46 +45,46 @@ cdef float ac7 = -0.0003
 cdef float ac8 = 45.8
 cdef float pi = 3.14159
 cdef float pi_2 = 1.5708
-cdef float turn_rate_limit = deg_to_rad(40.0)
+cdef float turn_rate_limit = 0.6981317007977318
 
 # episode end criteria
-cdef float t_after_start = cfg["max_time_after_start"]
-cdef float dmg_after_start = cfg["dmg_after_start"]
+cdef float t_after_start = 20
+cdef float dmg_after_start = 50
 
 # start line
-cdef float line_len = cfg["line_length"]
-cdef float line_skew = cfg["line_skew"]
-cdef float line_len_variability = cfg["line_length_variability"]
-cdef float line_skew_variability = cfg["line_skew_variability"]
+cdef float line_len = 200
+cdef float line_skew = 0
+cdef float line_len_variability = 100
+cdef float line_skew_variability = 0.5
 
 # start box
-cdef float box_width = cfg["box_width"] / 2
-cdef float box_depth = cfg["box_depth"]
+cdef float box_width = 1300 / 2
+cdef float box_depth = 1300
 
 # indexs for variable positions in the state vector
-cdef int idx_b1x = cfg["state_idx"]["b1_x"]
-cdef int idx_b1y = cfg["state_idx"]["b1_y"]
-cdef int idx_b1v = cfg["state_idx"]["b1_v"]
-cdef int idx_b1cwa = cfg["state_idx"]["b1_cwa"]
-cdef int idx_b1tr = cfg["state_idx"]["b1_tr"]
-cdef int idx_b1ent = cfg["state_idx"]["b1_entered"]
-cdef int idx_b1start = cfg["state_idx"]["b1_started"]
-cdef int idx_b2x = cfg["state_idx"]["b2_x"]
-cdef int idx_b2y = cfg["state_idx"]["b2_y"]
-cdef int idx_b2v = cfg["state_idx"]["b2_v"]
-cdef int idx_b2cwa = cfg["state_idx"]["b2_cwa"]
-cdef int idx_b2tr = cfg["state_idx"]["b2_tr"]
-cdef int idx_b2ent = cfg["state_idx"]["b2_entered"]
-cdef int idx_b2start = cfg["state_idx"]["b2_started"]
-cdef int idx_t = cfg["state_idx"]["t"]
-cdef int idx_prt_x = cfg["state_idx"]["prt_x"]
-cdef int idx_prt_y = cfg["state_idx"]["prt_y"]
-cdef int idx_stb_x = cfg["state_idx"]["stb_x"]
-cdef int idx_stb_y = cfg["state_idx"]["stb_y"]
-cdef int idx_row = cfg["state_idx"]["row"]
-cdef int idx_row_1 = cfg["state_idx"]["row_1"]
-cdef int idx_row_2 = cfg["state_idx"]["row_2"]
-cdef int idx_tws = cfg["state_idx"]["tws"]
+cdef int idx_b1x = 0
+cdef int idx_b1y = 1
+cdef int idx_b1v = 2
+cdef int idx_b1cwa = 3
+cdef int idx_b1tr = 4
+cdef int idx_b1ent = 5
+cdef int idx_b1start = 6
+cdef int idx_b2x = 7
+cdef int idx_b2y = 8
+cdef int idx_b2v = 9
+cdef int idx_b2cwa = 10
+cdef int idx_b2tr = 11
+cdef int idx_b2ent = 12
+cdef int idx_b2start = 13
+cdef int idx_t = 14
+cdef int idx_prt_x = 15
+cdef int idx_prt_y = 16
+cdef int idx_stb_x = 17
+cdef int idx_stb_y = 18
+cdef int idx_row = 19
+cdef int idx_row_1 = 20
+cdef int idx_row_2 = 21
+cdef int idx_tws = 22
 
 ################################################################
 cdef float rand_float():
@@ -176,9 +176,12 @@ cdef float calc_acc(float tws, float cwa, float v, float turn_rate, float displa
     return acc
 
 ################################################################
-cdef float calc_turn_rate(float v, float cwa, float prev_tr, float turn_angle, float dt):
-    cdef float turn_rate, max_turn_rate, max_delta_turn_rate
+cdef float calc_turn_rate(float v, float cwa, float prev_tr, float action, float dt):
+    cdef float turn_rate, max_turn_rate, max_delta_turn_rate, turn_angle
 
+    # set the turn angle from the action
+    turn_angle = action / 5.0
+    
     # set the desired turn rate based on turn angle
     turn_rate = fabs(turn_angle) / dt
 
@@ -205,11 +208,34 @@ cdef float calc_turn_rate(float v, float cwa, float prev_tr, float turn_angle, f
     return turn_rate
 
 ################################################################
+cdef void get_vertex_position(float x, float y, float cwa, float vertex, float[:,::1] boundary, float[::1] v_loc):
+    cdef int vertex_i = <int> vertex
+    v_loc[0] = x + boundary[vertex_i, 0] * cos(cwa) + boundary[vertex_i, 1] * sin(cwa)
+    v_loc[1] = y + boundary[vertex_i, 1] * cos(cwa) - boundary[vertex_i, 0] * sin(cwa)
+    return
+
+################################################################
+def get_bow_location(float[::1] state, b1):
+    cdef float x, y
+    if b1:
+        x = state[idx_b1x] + virtual_boundary[0, 1] * sin(state[idx_b1cwa])
+        y = state[idx_b1y] + virtual_boundary[0, 1] * cos(state[idx_b1cwa])
+    else:
+        x = state[idx_b2x] + virtual_boundary[0, 1] * sin(state[idx_b2cwa])
+        y = state[idx_b2y] + virtual_boundary[0, 1] * cos(state[idx_b2cwa])
+    return float(x), float(y)
+
+################################################################
 cdef int calc_row(float[::1] state):
     # right of way, 1 = boat 1 has right of way, -1 = boat 2 has right of way, 0 = neither boat has right of way
     cdef float x, y, s1x, s2x, b1y, b2y, m
     cdef int flag
     flag = 0
+
+    cdef array.array s1_ = array.array('f', [0, 0])
+    cdef array.array s2_ = array.array('f', [0, 0])
+    cdef float[::1] s1 = s1_
+    cdef float[::1] s2 = s2_
 
     ################################################################
     # check if they are on different tacks
@@ -235,17 +261,24 @@ cdef int calc_row(float[::1] state):
         x = line_intersection_x(state[idx_b1x], state[idx_b1y], state[idx_b1cwa], state[idx_b2x], state[idx_b2y], state[idx_b2cwa])
 
         # is the intersection point aft of both bows
+        get_vertex_position(state[idx_b1x], state[idx_b1y], state[idx_b1cwa], 1, virtual_boundary, s1)
+        get_vertex_position(state[idx_b2x], state[idx_b2y], state[idx_b2cwa], 1, virtual_boundary, s2)
+        s1x = s1[0]
+        s2x = s2[0]
+
         if state[idx_b1cwa] > 0:
-            if x < state[idx_b1x] and x < state[idx_b2x]:
+            if x < s1x and x < s2x:
                 flag = 1
         else:
-            if x > state[idx_b1x] and x > state[idx_b2x]:
+            if x > s1x and x > s2x:
                 flag = 1
 
         # is the intersection point forward of both sterns
         if flag == 0:
-            s1x = state[idx_b1x] + virtual_boundary[2,1] * sin(state[idx_b1cwa])
-            s2x = state[idx_b2x] + virtual_boundary[2,1] * sin(state[idx_b2cwa])
+            get_vertex_position(state[idx_b1x], state[idx_b1y], state[idx_b1cwa], 3, virtual_boundary, s1)
+            get_vertex_position(state[idx_b2x], state[idx_b2y], state[idx_b2cwa], 3, virtual_boundary, s2)
+            s1x = s1[0]
+            s2x = s2[0]
             if state[idx_b1cwa] > 0:
                 if x > s1x and x > s2x:
                     flag = -1
@@ -305,7 +338,7 @@ cdef bint overlap(float[::1] state, float [:,::1] boundary):
     cdef int i, i2, j, j2
 
     dist = sqrt((state[idx_b2x] - state[idx_b1x]) ** 2 + (state[idx_b2y] - state[idx_b1y]) ** 2)
-    if dist < 60:
+    if dist < 30:
         # step through lines that make up boat 1 boundary
         for i in range(4):
             x1 = state[idx_b1x] + boundary[i,0] * cos(state[idx_b1cwa]) + boundary[i,1] * sin(state[idx_b1cwa])
@@ -332,28 +365,22 @@ cdef bint overlap(float[::1] state, float [:,::1] boundary):
     return 0
 
 ################################################################
-cdef float point_to_line_dist(float linex1, float liney1, float linex2, float liney2, float pointx, float pointy):
-    cdef float mu, x, y, d
-
-    mu = ((pointx - linex1) * (linex2 - linex1) + (pointy - liney1) * (liney2 - liney1)) / (pow(linex2 - linex1, 2) + pow(liney2 - liney1, 2))
-    if mu < 0:
-        mu = 0
-    if mu > 1:
-        mu = 1
-    x = linex1 + mu * (linex2 - linex1)
-    y = liney1 + mu * (liney2 - liney1)
-    d = sqrt((x - pointx) ** 2 + (y - pointy) ** 2)
-
-    return d
-
-################################################################
-cdef float over_line(float[::1] state, int idx_x, int idx_y):
-    cdef float over, y, m
+cdef over_line(float[::1] state, int idx_x, int idx_y, int cwa, float [:,::1] b, float[::1] over):
+    cdef float y, m, vertex_x, vertex_y
+    cdef int i
+    over[0] = -10000
+    over[1] = 0
     m = (state[idx_stb_y] - state[idx_prt_y]) / (state[idx_stb_x] - state[idx_prt_x])
-    y = m * (state[idx_x] - state[idx_prt_x]) + state[idx_prt_y]
-    over = state[idx_y] - y
-    return over
 
+    for i in range(4):
+        vertex_x = state[idx_x] + b[i,0] * cos(state[cwa]) + b[i,1] * sin(state[cwa])
+        vertex_y = state[idx_y] + b[i,1] * cos(state[cwa]) - b[i,0] * sin(state[cwa])
+        y = m * (vertex_x - state[idx_prt_x]) + state[idx_prt_y]
+        if vertex_y - y > over[0]:
+            over[0] = vertex_y - y
+            over[1] = i
+    return 
+    
 ################################################################
 cdef float final_dmg(float[::1] state, int idx_x, int idx_y, int idx_v, int idx_cwa, int idx_tr, int idx_started):
     # step forward 5 seconds, estimating final distance to windward
@@ -400,174 +427,25 @@ cdef float final_dmg(float[::1] state, int idx_x, int idx_y, int idx_v, int idx_
     return y
 
 ################################################################
-def reward(float[::1] state, float[::1] prev_state, int row, float dt, float prestart_duration):
-    cdef float  r = 0, b2b1_x, b2b1_y, b2b1_dir
-    cdef float d, prev_over, over, b1_dist, b2_dist
-    cdef int pnlt_freq = 0, won_freq = 0
-
-    ################################################################
-    # check for infringement
-    if overlap(state, virtual_boundary):
-        if not overlap(prev_state, virtual_boundary):
-            pnlt_freq = 1
-            if row < 0:
-                r -= penalty
-            else:
-                r += penalty
-                won_freq = 1
-
-        # check for collisions
-        if overlap(state, physical_boundary):
-            # if collided, kill episode directly for faster iteration
-            r -= collision_penalty
-            return float(r), int(pnlt_freq), int(won_freq), True
-
-    ################################################################
-    # check for staying in the start box
-    if state[idx_b1y] < -box_depth:
-        r -= 0.01
-    if fabs(state[idx_b1x]) > box_width:
-        r -= 0.01
-
-    ################################################################
-    # check for entering the start box correctly 
-    # boat 1
-    if state[idx_b1ent] < 0.5:
-        over = over_line(state, idx_b1x, idx_b1y)
-        prev_over = over_line(prev_state, idx_b1x, idx_b1y)
-        if over < 0 and prev_over > 0 and fabs(state[idx_b1x]) < state[idx_stb_x]:
-            # entered correctly
-            state[idx_b1ent] = 1
-
-        if state[idx_b1x] < state[idx_stb_x] and prev_state[idx_b1x] > state[idx_stb_x]:
-            # crossed entry mark
-            if state[idx_b1y] < state[idx_stb_y]:
-                # didn't enter above the entry mark, penalise it
-                r -= start_penalty + (state[idx_stb_y] - state[idx_b1y]) / 1000.0
-                state[idx_b1ent] = 1
-
-        if state[idx_b1x] > state[idx_prt_x] and prev_state[idx_b1x] < state[idx_prt_x]:
-            # crossed entry mark
-            if state[idx_b1y] < state[idx_prt_y]:
-                # didn't enter above the entry mark, penalise it
-                r -= start_penalty + (state[idx_prt_y] - state[idx_b1y]) / 1000.0
-                state[idx_b1ent] = 1
-            
-        if state[idx_t] > 30:
-            # didn't enter within 30s, penalise it
-            if state[idx_b1x] > 0:
-                d = sqrt((state[idx_b1x] - state[idx_stb_x]) ** 2 + (state[idx_b1y] - state[idx_stb_y]) ** 2)
-                r -= (start_penalty + d / 1000.)
-            else:
-                d = sqrt((state[idx_b1x] - state[idx_prt_x]) ** 2 + (state[idx_b1y] - state[idx_prt_y]) ** 2)
-                r -= (start_penalty + d / 1000.)
-            state[idx_b1ent] = 1
-
-    # boat 2
-    if state[idx_b2ent] < 0.5:
-        over = over_line(state, idx_b2x, idx_b2y)
-        prev_over = over_line(prev_state, idx_b2x, idx_b2y)
-        if over < 0 and prev_over > 0 and fabs(state[idx_b2x]) < state[idx_stb_x]:
-            # entered correctly
-            state[idx_b2ent] = 1
-
-        if state[idx_b2x] < state[idx_stb_x] and prev_state[idx_b2x] > state[idx_stb_x]:
-            # crossed entry mark
-            if state[idx_b2y] < state[idx_stb_y]:
-                # didn't enter above the entry mark, penalise it
-                r += start_penalty + (state[idx_stb_y] - state[idx_b2y]) / 1000.0
-                state[idx_b2ent] = 1
-
-        if state[idx_b2x] > state[idx_prt_x] and prev_state[idx_b2x] < state[idx_prt_x]:
-            # crossed entry mark
-            if state[idx_b2y] < state[idx_prt_y]:
-                # didn't enter above the entry mark, penalise it
-                r += start_penalty + (state[idx_prt_y] - state[idx_b2y]) / 1000.0
-                state[idx_b2ent] = 1
-            
-        if state[idx_t] > 30:
-            # didn't enter within 30s, penalise it
-            if state[idx_b2x] > 0:
-                d = sqrt((state[idx_b2x] - state[idx_stb_x]) ** 2 + (state[idx_b2y] - state[idx_stb_y]) ** 2)
-                r += (start_penalty + d / 1000.)
-            else:
-                d = sqrt((state[idx_b2x] - state[idx_prt_x]) ** 2 + (state[idx_b2y] - state[idx_prt_y]) ** 2)
-                r += (start_penalty + d / 1000.)
-            state[idx_b2ent] = 1
-
-    ################################################################
-    # penalise boats for crossing the line early (in the last 20s)
-    if state[idx_t] > prestart_duration - 20 and state[idx_t] <= prestart_duration:
-        # boat 1
-        over = over_line(state, idx_b1x, idx_b1y)
-        if over > 0:
-            prev_over = over_line(prev_state, idx_b1x, idx_b1y)
-            if prev_over <= 0:
-                if line_segment_intersect(prev_state[idx_b1x], prev_state[idx_b1y], state[idx_b1x], state[idx_b1y], state[idx_prt_x], state[idx_prt_y], state[idx_stb_x], state[idx_stb_y]) >= 0:
-                    # boat 1 crossed the line before the start
-                    r -= start_penalty
-        
-        # boat 2
-        over = over_line(state, idx_b2x, idx_b2y)
-        if over > 0:
-            prev_over = over_line(prev_state, idx_b2x, idx_b2y)
-            if prev_over <= 0:
-                if line_segment_intersect(prev_state[idx_b2x], prev_state[idx_b2y], state[idx_b2x], state[idx_b2y], state[idx_prt_x], state[idx_prt_y], state[idx_stb_x], state[idx_stb_y]) >= 0:
-                    # boat 2 crossed the line before the start
-                    r += start_penalty
-
-        # add rewards for b1 distance ahead of b2 at the gun
-        if state[idx_t] > prestart_duration - dt / 5:
-            # get distance of the boats to the line
-            b1_dist = point_to_line_dist(state[idx_prt_x], state[idx_prt_y], state[idx_stb_x], state[idx_stb_y], state[idx_b1x], state[idx_b1y])
-            b2_dist = point_to_line_dist(state[idx_prt_x], state[idx_prt_y], state[idx_stb_x], state[idx_stb_y], state[idx_b2x], state[idx_b2y])
-
-            # add the reward
-            r += 0.2 * (b2_dist - b1_dist) / 1000.0
-
-    ################################################################
-    # if the start has happened
-    if state[idx_t] > prestart_duration:
-
-        # check for the boats starting
-        # boat 1
-        if state[idx_b1start] < 0.5:
-            over = over_line(state, idx_b1x, idx_b1y)
-            if over > 0:
-                prev_over = over_line(prev_state, idx_b1x, idx_b1y)
-                if prev_over <= 0:
-                    if line_segment_intersect(prev_state[idx_b1x], prev_state[idx_b1y], state[idx_b1x], state[idx_b1y], state[idx_prt_x], state[idx_prt_y], state[idx_stb_x], state[idx_stb_y]) >= 0:
-                        # started correctly
-                        state[idx_b1start] = 1    
-        # boat 2
-        if state[idx_b2start] < 0.5:
-            over = over_line(state, idx_b2x, idx_b2y)
-            if over > 0:
-                prev_over = over_line(prev_state, idx_b2x, idx_b2y)
-                if prev_over <= 0:
-                    if line_segment_intersect(prev_state[idx_b2x], prev_state[idx_b2y], state[idx_b2x], state[idx_b2y], state[idx_prt_x], state[idx_prt_y], state[idx_stb_x], state[idx_stb_y]) >= 0:
-                        # started correctly
-                        state[idx_b2start] = 1
-
-        # check for either boat getting to 50m dmg after the start
-        if (state[idx_b1y] >= dmg_after_start and state[idx_b1start] > 0.5) or (state[idx_b2y] >= dmg_after_start and state[idx_b2start] > 0.5):
-            r += final_reward_scale * final_dmg(state, idx_b1x, idx_b1y, idx_b1v, idx_b1cwa, idx_b1tr, idx_b1start) / 1000.0
-            r -= final_reward_scale * final_dmg(state, idx_b2x, idx_b2y, idx_b2v, idx_b2cwa, idx_b2tr, idx_b2start) / 1000.0
-            return float(r), int(pnlt_freq), int(won_freq), True
-
-        # check for the episode ending because of time running out
-        if state[idx_t] >= prestart_duration + t_after_start:
-            r += final_reward_scale * final_dmg(state, idx_b1x, idx_b1y, idx_b1v, idx_b1cwa, idx_b1tr, idx_b1start) / 1000.0
-            r -= final_reward_scale * final_dmg(state, idx_b2x, idx_b2y, idx_b2v, idx_b2cwa, idx_b2tr, idx_b2start) / 1000.0
-            return float(r), int(pnlt_freq), int(won_freq), True
-
-    return float(r), int(pnlt_freq), int(won_freq), False
-
-################################################################
 def game_reward(float[::1] state, float[::1] prev_state, int row, float dt, float prestart_duration):
     cdef float  r = 0, b2b1_x, b2b1_y, b2b1_dir
     cdef float b1_over, b2_over, d
+    cdef int vertex, prev_vertex
     info = {}
+
+    #v_loc_np = np.array([0, 0], dtype=np.float32)
+    #prev_v_loc_np = np.array([0, 0], dtype=np.float32)
+    #cdef float [::1] v_loc = v_loc_np
+    #cdef float [::1] prev_v_loc = prev_v_loc_np    
+
+    cdef array.array v_loc_ = array.array('f', [0, 0])
+    cdef array.array prev_v_loc_ = array.array('f', [0, 0])
+    cdef array.array over_ = array.array('f', [0, 0])
+    cdef array.array prev_over_ = array.array('f', [0, 0])    
+    cdef float[::1] v_loc = v_loc_
+    cdef float[::1] prev_v_loc = prev_v_loc_
+    cdef float[::1] over = over_
+    cdef float[::1] prev_over = prev_over_  
 
     ################################################################
     # check for infringement
@@ -606,9 +484,9 @@ def game_reward(float[::1] state, float[::1] prev_state, int row, float dt, floa
     # check for entering the start box correctly 
     # boat 1
     if state[idx_b1ent] < 0.5:
-        over = over_line(state, idx_b1x, idx_b1y)
-        prev_over = over_line(prev_state, idx_b1x, idx_b1y)
-        if over < 0 and prev_over > 0 and fabs(state[idx_b1x]) < state[idx_stb_x]:
+        over_line(state, idx_b1x, idx_b1y, idx_b1cwa, virtual_boundary, over)
+        over_line(prev_state, idx_b1x, idx_b1y, idx_b1cwa, virtual_boundary, prev_over)
+        if over[0] < 0 and prev_over[0] > 0 and fabs(state[idx_b1x]) < state[idx_stb_x]:
             # entered correctly
             state[idx_b1ent] = 1
 
@@ -638,9 +516,9 @@ def game_reward(float[::1] state, float[::1] prev_state, int row, float dt, floa
 
     # boat 2
     if state[idx_b2ent] < 0.5:
-        over = over_line(state, idx_b2x, idx_b2y)
-        prev_over = over_line(prev_state, idx_b2x, idx_b2y)
-        if over < 0 and prev_over > 0 and fabs(state[idx_b2x]) < state[idx_stb_x]:
+        over_line(state, idx_b2x, idx_b2y, idx_b2cwa, virtual_boundary, over)
+        over_line(prev_state, idx_b2x, idx_b2y, idx_b2cwa, virtual_boundary, prev_over)
+        if over[0] < 0 and prev_over[0] > 0 and fabs(state[idx_b2x]) < state[idx_stb_x]:
             # entered correctly
             state[idx_b2ent] = 1
 
@@ -673,20 +551,27 @@ def game_reward(float[::1] state, float[::1] prev_state, int row, float dt, floa
     if state[idx_t] > prestart_duration:
 
         # check for the boats starting
+        # boat 1
         if state[idx_b1start] < 0.5:
-            over = over_line(state, idx_b1x, idx_b1y)
-            if over > 0:
-                prev_over = over_line(prev_state, idx_b1x, idx_b1y)
-                if prev_over <= 0:
-                    if line_segment_intersect(prev_state[idx_b1x], prev_state[idx_b1y], state[idx_b1x], state[idx_b1y], state[idx_prt_x], state[idx_prt_y], state[idx_stb_x], state[idx_stb_y]) >= 0:
+            over_line(state, idx_b1x, idx_b1y, idx_b1cwa, virtual_boundary, over)
+            if over[0] > 0:
+                over_line(prev_state, idx_b1x, idx_b1y, idx_b1cwa, virtual_boundary, prev_over)
+                if prev_over[0] <= 0:
+                    get_vertex_position(state[idx_b1x], state[idx_b1y], state[idx_b1cwa], over[1], virtual_boundary, v_loc)
+                    get_vertex_position(prev_state[idx_b1x], prev_state[idx_b1y], prev_state[idx_b1cwa], over[1], virtual_boundary, prev_v_loc)
+                    if line_segment_intersect(v_loc[0], v_loc[1], prev_v_loc[0], prev_v_loc[1], state[idx_prt_x], state[idx_prt_y], state[idx_stb_x], state[idx_stb_y]) >= 0:
                         # started correctly
                         state[idx_b1start] = 1
+
+        # boat 2
         if state[idx_b2start] < 0.5:
-            over = over_line(state, idx_b2x, idx_b2y)
-            if over > 0:
-                prev_over = over_line(prev_state, idx_b2x, idx_b2y)
-                if prev_over <= 0:
-                    if line_segment_intersect(prev_state[idx_b2x], prev_state[idx_b2y], state[idx_b2x], state[idx_b2y], state[idx_prt_x], state[idx_prt_y], state[idx_stb_x], state[idx_stb_y]) >= 0:
+            over_line(state, idx_b2x, idx_b2y, idx_b2cwa, virtual_boundary, over)
+            if over[0] > 0:
+                over_line(prev_state, idx_b2x, idx_b2y, idx_b2cwa, virtual_boundary, prev_over)
+                if prev_over[0] <= 0:
+                    get_vertex_position(state[idx_b2x], state[idx_b2y], state[idx_b2cwa], over[1], virtual_boundary, v_loc)
+                    get_vertex_position(prev_state[idx_b2x], prev_state[idx_b2y], prev_state[idx_b2cwa], over[1], virtual_boundary, prev_v_loc) 
+                    if line_segment_intersect(v_loc[0], v_loc[1], prev_v_loc[0], prev_v_loc[1], state[idx_prt_x], state[idx_prt_y], state[idx_stb_x], state[idx_stb_y]) >= 0:
                         # started correctly
                         state[idx_b2start] = 1
 
@@ -705,7 +590,7 @@ def game_reward(float[::1] state, float[::1] prev_state, int row, float dt, floa
     return float(r), info, False
 
 ################################################################
-def step(float[::1] state, float[::1] ini_state, float[::1] action, int row, float dt, float prestart_duration, int rew_type, float ave_tws):
+def step(float[::1] state, float[::1] ini_state, float[::1] action, int row, float dt, float prestart_duration, float ave_tws):
     cdef float acc
 
     ##################################################################
@@ -756,19 +641,14 @@ def step(float[::1] state, float[::1] ini_state, float[::1] action, int row, flo
 
     ##################################################################
     # calculate the reward for this state for boat 1
-    if rew_type == 0:
-        r, pnlt_freq, won_freq, done = reward(state, ini_state, row, dt, prestart_duration)
-    if rew_type == 1:
-        r, info, done = game_reward(state, ini_state, row, dt, prestart_duration)
+    r, info, done = game_reward(state, ini_state, row, dt, prestart_duration)
 
     ##################################################################
     # calculate the current right of way
     row = calc_row(state)
 
-    if rew_type == 1:
-        return r, done, info, int(row)
-    return r, done, pnlt_freq, won_freq, int(row)
-    
+    return r, done, info, int(row)
+
 ################################################################
 def normalise(float[::1] state, float  prestart_duration):
     # boat 1
@@ -801,8 +681,9 @@ def normalise(float[::1] state, float  prestart_duration):
     return
 
 ################################################################
-def reset(float[::1] state, float length, float skew, b1_enter_stb):
+def game_reset(float[::1] state, float length, float skew, b1_enter_stb):
     cdef int entry_side = 1, row
+    cdef float d, ang
     if not b1_enter_stb:
         entry_side = -1
 
@@ -819,13 +700,6 @@ def reset(float[::1] state, float length, float skew, b1_enter_stb):
 
     ##################################################################
     # boat 1
-    # location
-    if entry_side == 1:
-        state[idx_b1x] = state[idx_stb_x] + 250 + rand_float_0_1() * 75
-        state[idx_b1y] = state[idx_stb_y] + 80 + rand_float() * 50
-    else:
-        state[idx_b1x] = state[idx_prt_x] - 15 - rand_float_0_1() * 75
-        state[idx_b1y] = state[idx_prt_y] + 25 + rand_float() * 50
     
     # cwa
     state[idx_b1cwa] = -deg_to_rad(100.0) * entry_side + rand_float() * deg_to_rad(30.0)
@@ -836,6 +710,18 @@ def reset(float[::1] state, float length, float skew, b1_enter_stb):
     # v
     state[idx_b1v] = calc_polar_v(state[idx_tws], state[idx_b1cwa])
 
+    # location
+    if entry_side == 1:
+        d = state[idx_b1v] * (10 + rand_float_0_1() * 3)
+        ang = state[idx_b1cwa] + pi + rand_float() * deg_to_rad(30.0)
+        state[idx_b1x] = state[idx_stb_x] + d * sin(ang)
+        state[idx_b1y] = state[idx_stb_y] + d * cos(ang) + 20
+    else:
+        d = state[idx_b1v] * rand_float_0_1() * 3
+        ang = state[idx_b1cwa] + pi + rand_float() * deg_to_rad(30.0)
+        state[idx_b1x] = state[idx_prt_x] + d * sin(ang)
+        state[idx_b1y] = state[idx_prt_y] + d * cos(ang) + 20
+
     # entered
     state[idx_b1ent] = 0
 
@@ -844,14 +730,6 @@ def reset(float[::1] state, float length, float skew, b1_enter_stb):
 
     ##################################################################
     # boat 2
-
-    # location
-    if entry_side == -1:
-        state[idx_b2x] = state[idx_stb_x] + 250 + rand_float_0_1() * 75
-        state[idx_b2y] = state[idx_stb_y] + 80 + rand_float() * 50
-    else:
-        state[idx_b2x] = state[idx_prt_x] - 15 - rand_float_0_1() * 75
-        state[idx_b2y] = state[idx_prt_y] + 20 + rand_float() * 50
     
     # cwa
     state[idx_b2cwa] = deg_to_rad(100.0) * entry_side + rand_float() * deg_to_rad(30.0)
@@ -861,6 +739,18 @@ def reset(float[::1] state, float length, float skew, b1_enter_stb):
 
     # v
     state[idx_b2v] = calc_polar_v(state[idx_tws], state[idx_b2cwa])
+
+    # location
+    if entry_side == -1:
+        d = state[idx_b2v] * (10 + rand_float_0_1() * 3)
+        ang = state[idx_b2cwa] + pi + rand_float() * deg_to_rad(30.0)
+        state[idx_b2x] = state[idx_stb_x] + d * sin(ang)
+        state[idx_b2y] = state[idx_stb_y] + d * cos(ang) + 20
+    else:
+        d = state[idx_b2v] * rand_float_0_1() * 3
+        ang = state[idx_b2cwa] + pi + rand_float() * deg_to_rad(30.0)
+        state[idx_b2x] = state[idx_prt_x] + d * sin(ang)
+        state[idx_b2y] = state[idx_prt_y] + d * cos(ang) + 20
 
     # entered
     state[idx_b2ent] = 0

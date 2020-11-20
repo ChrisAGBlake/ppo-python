@@ -1,7 +1,3 @@
-# uncomment top 2 lines to generate html coverage report
-# import Cython.Compiler.Options
-# Cython.Compiler.Options.annotate = True
-
 from setuptools import setup
 from setuptools import Extension
 from Cython.Build import cythonize
