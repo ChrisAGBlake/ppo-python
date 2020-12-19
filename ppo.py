@@ -5,8 +5,6 @@ from torch.distributions.normal import Normal
 from env import Env
 import numpy as np
 
-torch.autograd.set_detect_anomaly(True)
-
 class Actor(nn.Module):
     def __init__(self, state_size, action_size, hidden_size):
         super(Actor, self).__init__()
@@ -62,7 +60,7 @@ class PPO():
 
     def __init__(self):
         # initialise variables
-        self.batch_size = 2000
+        self.batch_size = 20000
         self.lr = 1e-4
         self.gamma = 0.99
         self.lam = 0.95
@@ -90,6 +88,7 @@ class PPO():
 
 
     def episode(self, data):
+        
         # reset the state
         self.env.reset()
 
@@ -169,7 +168,7 @@ class PPO():
         data_batch.advantages = torch.as_tensor(data_batch.advantages)
         data_batch.values = torch.as_tensor(data_batch.values)
         data_batch.rewards = torch.as_tensor(data_batch.rewards)
-        
+
         return data_batch
 
 
