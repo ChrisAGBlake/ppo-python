@@ -55,34 +55,6 @@ class Critic(nn.Module):
         x = self.l7(x)
         return x
 
-class Buffer():
-    def __init__(self, size, state_size, action_size):
-        self.size = size
-        self.states = np.zeros((size, state_size), dtype=np.float32)
-        self.actions = np.zeros((size, action_size), dtype=np.float32)
-        self.log_probs = np.zeros(size, dtype=np.float32)
-        self.rewards_to_go = np.zeros(size, dtype=np.float32)
-        self.advantages = np.zeros(size, dtype=np.float32)
-        self.values = np.zeros(size, dtype=np.float32)
-
-    def normalise_advantages(self):
-        mu = np.mean(self.advantages)
-        sigma = np.std(self.advantages)
-        self.advantages = (self.advantages - mu) / sigma
-        return
-
-class EpisodeBuffer():
-    def __init__(self, n_parallel, size, state_size, action_size):
-        self.size = size
-        self.states = np.zeros((n_parallel, size, state_size), dtype=np.float32)
-        self.actions = np.zeros((n_parallel, size, action_size), dtype=np.float32)
-        self.log_probs = np.zeros((n_parallel, size), dtype=np.float32)
-        self.values = np.zeros((n_parallel, size + 1), dtype=np.float32)
-        self.rewards = np.zeros((n_parallel, size), dtype=np.float32)
-        self.rewards_to_go = np.zeros((n_parallel, size), dtype=np.float32)
-        self.advantages = np.zeros((n_parallel, size), dtype=np.float32)
-        self.idxs = np.zeros(n_parallel, dtype=np.int)
-
 class PPO():
 
     def __init__(self):
@@ -115,12 +87,25 @@ class PPO():
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), self.lr)
 
 
-    # this section is 10x faster in Julia, try to speed it up using cython
     def get_batch(self):
 
-        # set up date buffers for the batch and for individual episodes
-        data_batch = Buffer(self.batch_size, self.env.state_size, self.env.action_size)
-        data_episode = EpisodeBuffer(self.n_parallel, self.env.max_steps, self.env.state_size, self.env.action_size)
+        # setup data buffers for the batch of episodes
+        batch_states = np.zeros((self.batch_size, self.env.state_size), dtype=np.float32)
+        batch_actions = np.zeros((self.batch_size, self.env.action_size), dtype=np.float32)
+        batch_log_probs = np.zeros(self.batch_size, dtype=np.float32)
+        batch_rewards_to_go = np.zeros(self.batch_size, dtype=np.float32)
+        batch_advantages = np.zeros(self.batch_size, dtype=np.float32)
+        batch_values = np.zeros(self.batch_size, dtype=np.float32)
+
+        # setup data buffers for the indiviual episodes
+        episode_states = np.zeros((self.n_parallel, self.env.max_steps, self.env.state_size), dtype=np.float32)
+        episode_actions = np.zeros((self.n_parallel, self.env.max_steps, self.env.action_size), dtype=np.float32)
+        episode_log_probs = np.zeros((self.n_parallel, self.env.max_steps), dtype=np.float32)
+        episode_values = np.zeros((self.n_parallel, self.env.max_steps + 1), dtype=np.float32)
+        episode_rewards = np.zeros((self.n_parallel, self.env.max_steps), dtype=np.float32)
+        episode_rewards_to_go = np.zeros((self.n_parallel, self.env.max_steps), dtype=np.float32)
+        episode_advantages = np.zeros((self.n_parallel, self.env.max_steps), dtype=np.float32)
+        episode_idxs = np.zeros(self.n_parallel, dtype=np.int)
 
         # reset the states
         for i in range(self.n_parallel):
@@ -146,10 +131,10 @@ class PPO():
 
             # add to the episode buffers
             for i in range(self.n_parallel):
-                data_episode.states[i, data_episode.idxs[i], :] = self.env.state[i, :]
-                data_episode.actions[i, data_episode.idxs[i], :] = action[i, :]
-                data_episode.values[i, data_episode.idxs[i]] = value[i, 0]
-                data_episode.log_probs[i, data_episode.idxs[i]] = log_prob[i]
+                episode_states[i, episode_idxs[i], :] = self.env.state[i, :]
+                episode_actions[i, episode_idxs[i], :] = action[i, :]
+                episode_values[i, episode_idxs[i]] = value[i, 0]
+                episode_log_probs[i, episode_idxs[i]] = log_prob[i]
             
 
             # update the states
@@ -157,98 +142,100 @@ class PPO():
             for i in range(self.n_parallel):
 
                 # add the rewards to the episode buffer
-                data_episode.rewards[i, data_episode.idxs[i]] = rewards[i]
+                episode_rewards[i, episode_idxs[i]] = rewards[i]
 
                 # check for the episode happening
-                if dones[i] or data_episode.idxs[i] == self.env.max_steps - 1:
+                if dones[i] or episode_idxs[i] == self.env.max_steps - 1:
                     # add a final 0 value
-                    sz = data_episode.idxs[i] + 1
-                    data_episode.values[i, sz] = 0
+                    sz = episode_idxs[i] + 1
+                    episode_values[i, sz] = 0
 
                     # calculate rewards to go
                     for j in range(sz):
-                        data_episode.rewards_to_go[i, j] = np.sum(data_episode.rewards[i, j:sz] * self.gamma_arr[:sz-j])
+                        episode_rewards_to_go[i, j] = np.sum(episode_rewards[i, j:sz] * self.gamma_arr[:sz-j])
 
                     # calculate the advantage estimates
-                    delta = data_episode.rewards[i, :sz] + self.gamma * data_episode.values[i, 1:sz+1] - data_episode.values[i, :sz]
+                    delta = episode_rewards[i, :sz] + self.gamma * episode_values[i, 1:sz+1] - episode_values[i, :sz]
                     for j in range(sz):
-                        data_episode.advantages[i, j] = np.sum(delta[j:sz] * self.gamma_lam_arr[:sz-j])
+                        episode_advantages[i, j] = np.sum(delta[j:sz] * self.gamma_lam_arr[:sz-j])
 
                     # update the buffers
                     s = n
                     sz = min(sz, self.batch_size - n)
                     n += sz
-                    data_batch.states[s:n, :] = data_episode.states[i, :sz, :]
-                    data_batch.actions[s:n, :] = data_episode.actions[i, :sz, :]
-                    data_batch.log_probs[s:n] = data_episode.log_probs[i, :sz]
-                    data_batch.rewards_to_go[s:n] = data_episode.rewards_to_go[i, :sz]
-                    data_batch.advantages[s:n] = data_episode.advantages[i, :sz]
-                    data_batch.values[s:n] = data_episode.values[i, :sz]
+                    batch_states[s:n, :] = episode_states[i, :sz, :]
+                    batch_actions[s:n, :] = episode_actions[i, :sz, :]
+                    batch_log_probs[s:n] = episode_log_probs[i, :sz]
+                    batch_rewards_to_go[s:n] = episode_rewards_to_go[i, :sz]
+                    batch_advantages[s:n] = episode_advantages[i, :sz]
+                    batch_values[s:n] = episode_values[i, :sz]
 
                     # reset the episode index
-                    data_episode.idxs[i] = 0
+                    episode_idxs[i] = 0
 
                     # reset this state
                     self.env.reset(i)
 
                 else:
-                     data_episode.idxs[i] += 1
+                    episode_idxs[i] += 1
             
 
         # normalise the advantage estimates
-        data_batch.normalise_advantages()
+        mu = np.mean(batch_advantages)
+        sigma = np.std(batch_advantages)
+        batch_advantages = (batch_advantages - mu) / sigma
 
         # change to torch tensors
-        data_batch.states = torch.as_tensor(data_batch.states)
-        data_batch.actions = torch.as_tensor(data_batch.actions)
-        data_batch.log_probs = torch.as_tensor(data_batch.log_probs)
-        data_batch.rewards_to_go = torch.as_tensor(data_batch.rewards_to_go)
-        data_batch.advantages = torch.as_tensor(data_batch.advantages)
-        data_batch.values = torch.as_tensor(data_batch.values)
+        batch_states = torch.as_tensor(batch_states)
+        batch_actions = torch.as_tensor(batch_actions)
+        batch_log_probs = torch.as_tensor(batch_log_probs)
+        batch_rewards_to_go = torch.as_tensor(batch_rewards_to_go)
+        batch_advantages = torch.as_tensor(batch_advantages)
+        batch_values = torch.as_tensor(batch_values)
 
-        return data_batch
+        return batch_states, batch_actions, batch_log_probs, batch_rewards_to_go, batch_advantages, batch_values
 
 
-    def actor_loss(self, data):
-        mu = self.actor(data.states)
+    def actor_loss(self, states, actions, log_probs, advantages):
+        mu = self.actor(states)
         pi = self.actor.dist(mu)
-        log_probs = self.actor.log_prob(pi, data.actions)
-        ratio = torch.exp(log_probs - data.log_probs)
-        clip_advantage = torch.clamp(ratio, 1-self.epsilon, 1+self.epsilon) * data.advantages
-        loss = -(torch.min(ratio * data.advantages, clip_advantage)).mean()
+        new_log_probs = self.actor.log_prob(pi, actions)
+        ratio = torch.exp(new_log_probs - log_probs)
+        clip_advantage = torch.clamp(ratio, 1-self.epsilon, 1+self.epsilon) * advantages
+        loss = -(torch.min(ratio * advantages, clip_advantage)).mean()
         return loss
 
 
-    def critic_loss(self, data):
-        values = self.critic(data.states)[:,0]
-        v_clip = data.values + torch.clamp(values - data.values, -self.epsilon, self.epsilon)
-        v_loss1 = torch.pow(values - data.rewards_to_go, 2)
-        v_loss2 = torch.pow(v_clip - data.rewards_to_go, 2)
+    def critic_loss(self, states, rewards_to_go, values):
+        new_values = self.critic(states)[:,0]
+        v_clip = values + torch.clamp(new_values - values, -self.epsilon, self.epsilon)
+        v_loss1 = torch.pow(new_values - rewards_to_go, 2)
+        v_loss2 = torch.pow(v_clip - rewards_to_go, 2)
         loss = torch.max(v_loss1, v_loss2).mean()
         return loss
 
 
-    def update(self, data):
+    def update(self, states, actions, log_probs, rewards_to_go, advantages, values):
 
         # shift to the gpu
-        data.states = data.states.cuda()
-        data.actions = data.actions.cuda()
-        data.log_probs = data.log_probs.cuda()
-        data.advantages = data.advantages.cuda()
-        data.values = data.values.cuda()
-        data.rewards_to_go = data.rewards_to_go.cuda()
+        states = states.cuda()
+        actions = actions.cuda()
+        log_probs = log_probs.cuda()
+        advantages = advantages.cuda()
+        values = values.cuda()
+        rewards_to_go = rewards_to_go.cuda()
 
         # update the actor
         for i in range(self.n_actor_updates):
             self.actor_opt.zero_grad()
-            loss_pi = self.actor_loss(data)
+            loss_pi = self.actor_loss(states, actions, log_probs, advantages)
             loss_pi.backward()
             self.actor_opt.step()
 
         # update the critic
         for i in range(self.n_critic_updates):
             self.critic_opt.zero_grad()
-            loss_v = self.critic_loss(data)
+            loss_v = self.critic_loss(states, rewards_to_go, values)
             loss_v.backward()
             self.critic_opt.step()
 
@@ -263,12 +250,12 @@ class PPO():
                 
                 # get a batch of data to train with
                 st = time.time()
-                data = self.get_batch()
+                states, actions, log_probs, rewards_to_go, advantages, values = self.get_batch()
                 bt = time.time() - st
 
                 # update the actor critic networks
                 st = time.time()
-                self.update(data)
+                self.update(states, actions, log_probs, rewards_to_go, advantages, values)
                 ut = time.time() - st
 
                 # timing for performance tracking
