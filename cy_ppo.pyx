@@ -13,13 +13,13 @@ cdef float rand_float():
     cdef float f = <float>rand() / <float>RAND_MAX - 0.5
     return f
 
-def env_reset(float[::] state):
+cpdef env_reset(float[::1] state):
     cdef int i
     for i in range(state_size):
         state[i] = rand_float()
     return
 
-cdef env_step(float[:,::] states, float[:,::] actions, float[::] rewards, int[::] dones):
+cdef env_step(float[:,::1] states, float[:,::1] actions, float[::1] rewards, int[::1] dones):
     cdef int i, j
     for i in range(n_parallel):
         for j in range(state_size):
@@ -29,30 +29,30 @@ cdef env_step(float[:,::] states, float[:,::] actions, float[::] rewards, int[::
     return
 
 def update_state_and_buffers(
-    float[:,::] states, 
-    float[:,::] actions, 
-    float[::] rewards, 
-    int[::] dones, 
-    float[:,::] values,
-    float[::] log_probs,
-    float[:,:,::] episode_states, 
-    float[:,:,::] episode_actions, 
-    float[:,::] episode_values, 
-    float[:,::] episode_log_probs, 
-    float[:,::] episode_rewards,
-    float[:,::] episode_rewards_to_go,
-    float[:,::] episode_advantages,
-    float[:,::] batch_states, 
-    float[:,::] batch_actions, 
-    float[::] batch_values, 
-    float[::] batch_log_probs, 
-    float[::] batch_rewards_to_go,
-    float[::] batch_advantages,
-    float[::] delta,
+    float[:,::1] states, 
+    float[:,::1] actions, 
+    float[::1] rewards, 
+    int[::1] dones, 
+    float[:,::1] values,
+    float[::1] log_probs,
+    float[:,:,::1] episode_states, 
+    float[:,:,::1] episode_actions, 
+    float[:,::1] episode_values, 
+    float[:,::1] episode_log_probs, 
+    float[:,::1] episode_rewards,
+    float[:,::1] episode_rewards_to_go,
+    float[:,::1] episode_advantages,
+    float[:,::1] batch_states, 
+    float[:,::1] batch_actions, 
+    float[::1] batch_values, 
+    float[::1] batch_log_probs, 
+    float[::1] batch_rewards_to_go,
+    float[::1] batch_advantages,
+    float[::1] delta,
     float gamma,
-    float[::] gamma_arr, 
-    float[::] gamma_lam_arr, 
-    int[::] idxs, 
+    float[::1] gamma_arr, 
+    float[::1] gamma_lam_arr, 
+    int[::1] idxs, 
     int n):
     cdef int i, j, k, s, sz
     cdef float v
