@@ -2,7 +2,6 @@ from libc.stdlib cimport rand
 cdef extern from "stdlib.h":
     int RAND_MAX
 import config as cfg
-import numpy as np
 
 cdef int n_parallel = cfg.n_parallel
 cdef int state_size = cfg.state_size
@@ -80,16 +79,12 @@ def update_state_and_buffers(
 
             # calculate rewards to go
             for j in range(sz):
-                # episode_rewards_to_go[i, j] = np.sum(episode_rewards[i, j:sz] * gamma_arr[:sz-j])
                 v = 0
                 for k in range(sz-j):
                     v += episode_rewards[i, j+k] * gamma_arr[k]
                 episode_rewards_to_go[i,j] = v
 
             # calculate the advantage estimates
-            # delta = episode_rewards[i, :sz] + gamma * episode_values[i, 1:sz+1] - episode_values[i, :sz]
-            # for j in range(sz):
-            #     episode_advantages[i, j] = np.sum(delta[j:sz] * gamma_lam_arr[:sz-j])
             for j in range(sz):
                 delta[j] = episode_rewards[i, j] + gamma * episode_values[i, j+1] - episode_values[i, j]
             for j in range(sz):
