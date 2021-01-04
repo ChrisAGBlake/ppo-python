@@ -2,7 +2,7 @@ import time
 import torch
 import torch.nn as nn
 from torch.distributions.normal import Normal
-from env import Env
+from cy_ppo import env_step, env_reset
 from config import *
 import numpy as np
 
@@ -60,9 +60,6 @@ class PPO():
 
     def __init__(self):
 
-        # setup the environment
-        self.env = Env()
-
         # setup actor critic nn models
         self.actor = Actor(state_size, action_size, 256).cuda()
         self.critic = Critic(state_size, 256).cuda()
@@ -78,8 +75,8 @@ class PPO():
         self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr)
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr)
 
-    def act(self):
-        state = torch.from_numpy(self.env.state).cuda()
+    def act(self, env_state):
+        state = torch.from_numpy(env_state).cuda()
         mu = self.actor(state)
         pi = self.actor.dist(mu)
         action = pi.sample()
@@ -108,11 +105,14 @@ class PPO():
         episode_rewards = np.zeros((n_parallel, max_steps), dtype=np.float32)
         episode_rewards_to_go = np.zeros((n_parallel, max_steps), dtype=np.float32)
         episode_advantages = np.zeros((n_parallel, max_steps), dtype=np.float32)
-        episode_idxs = np.zeros(n_parallel, dtype=np.int)
+        idxs = np.zeros(n_parallel, dtype=np.int)
+        states = np.zeros((n_parallel, state_size), dtype=np.float32)
+        rewards = np.zeros(n_parallel, dtype=np.float32)
+        dones = np.zeros(n_parallel, dtype=np.int32)
 
         # reset the states
         for i in range(n_parallel):
-            self.env.reset(i)
+            env_reset(states[i,:])
 
         # collect a batch of data
         n = 0
@@ -122,27 +122,27 @@ class PPO():
             # not needed for this env
             
             # get the actions, log_prob and value estimates
-            action, log_prob, value = self.act()
+            action, log_prob, value = self.act(states)
 
             # add to the episode buffers
             for i in range(n_parallel):
-                episode_states[i, episode_idxs[i], :] = self.env.state[i, :]
-                episode_actions[i, episode_idxs[i], :] = action[i, :]
-                episode_values[i, episode_idxs[i]] = value[i, 0]
-                episode_log_probs[i, episode_idxs[i]] = log_prob[i]
+                episode_states[i, idxs[i], :] = states[i, :]
+                episode_actions[i, idxs[i], :] = action[i, :]
+                episode_values[i, idxs[i]] = value[i, 0]
+                episode_log_probs[i, idxs[i]] = log_prob[i]
             
 
             # update the states
-            rewards, dones = self.env.step(action)
+            env_step(states, action.numpy(), rewards, dones)
             for i in range(n_parallel):
 
                 # add the rewards to the episode buffer
-                episode_rewards[i, episode_idxs[i]] = rewards[i]
+                episode_rewards[i, idxs[i]] = rewards[i]
 
                 # check for the episode happening
-                if dones[i] or episode_idxs[i] == max_steps - 1:
+                if dones[i] > 0 or idxs[i] == max_steps - 1:
                     # add a final 0 value
-                    sz = episode_idxs[i] + 1
+                    sz = idxs[i] + 1
                     episode_values[i, sz] = 0
 
                     # calculate rewards to go
@@ -166,13 +166,13 @@ class PPO():
                     batch_values[s:n] = episode_values[i, :sz]
 
                     # reset the episode index
-                    episode_idxs[i] = 0
+                    idxs[i] = 0
 
                     # reset this state
-                    self.env.reset(i)
+                    env_reset(states[i,:])
 
                 else:
-                    episode_idxs[i] += 1
+                    idxs[i] += 1
             
 
         # normalise the advantage estimates
