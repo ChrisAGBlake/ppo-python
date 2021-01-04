@@ -4,7 +4,7 @@ import random
 class Env():
     def __init__(self, n_parallel):
         self.dt = 1.0
-        self.max_steps = 10
+        self.max_steps = 100
         self.state_size = 20
         self.action_size = 2
         self.n_parallel = n_parallel

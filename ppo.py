@@ -72,21 +72,22 @@ class Buffer():
         return
 
 class EpisodeBuffer():
-    def __init__(self, size, n_parallel, state_size, action_size):
+    def __init__(self, n_parallel, size, state_size, action_size):
         self.size = size
-        self.states = np.zeros((size, n_parallel, state_size), dtype=np.float32)
-        self.actions = np.zeros((size, n_parallel, action_size), dtype=np.float32)
-        self.log_probs = np.zeros((size, n_parallel), dtype=np.float32)
-        self.values = np.zeros((size+1, n_parallel), dtype=np.float32)
-        self.rewards = np.zeros((size, n_parallel), dtype=np.float32)
-        self.rewards_to_go = np.zeros((size, n_parallel), dtype=np.float32)
-        self.advantages = np.zeros((size, n_parallel), dtype=np.float32)
+        self.states = np.zeros((n_parallel, size, state_size), dtype=np.float32)
+        self.actions = np.zeros((n_parallel, size, action_size), dtype=np.float32)
+        self.log_probs = np.zeros((n_parallel, size), dtype=np.float32)
+        self.values = np.zeros((n_parallel, size + 1), dtype=np.float32)
+        self.rewards = np.zeros((n_parallel, size), dtype=np.float32)
+        self.rewards_to_go = np.zeros((n_parallel, size), dtype=np.float32)
+        self.advantages = np.zeros((n_parallel, size), dtype=np.float32)
         self.idxs = np.zeros(n_parallel, dtype=np.int)
+
 class PPO():
 
     def __init__(self):
         # initialise variables
-        self.batch_size = 2000
+        self.batch_size = 20000
         self.lr = 1e-4
         self.gamma = 0.99
         self.lam = 0.95
@@ -114,11 +115,12 @@ class PPO():
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), self.lr)
 
 
+    # this section is 10x faster in Julia, try to speed it up using cython
     def get_batch(self):
 
         # set up date buffers for the batch and for individual episodes
         data_batch = Buffer(self.batch_size, self.env.state_size, self.env.action_size)
-        data_episode = EpisodeBuffer(self.env.max_steps, self.n_parallel, self.env.state_size, self.env.action_size)
+        data_episode = EpisodeBuffer(self.n_parallel, self.env.max_steps, self.env.state_size, self.env.action_size)
 
         # reset the states
         for i in range(self.n_parallel):
@@ -144,10 +146,10 @@ class PPO():
 
             # add to the episode buffers
             for i in range(self.n_parallel):
-                data_episode.states[data_episode.idxs[i], i, :] = self.env.state[i, :]
-                data_episode.actions[data_episode.idxs[i], i, :] = action[i, :]
-                data_episode.values[data_episode.idxs[i], i] = value[i, 0]
-                data_episode.log_probs[data_episode.idxs[i], i] = log_prob[i]
+                data_episode.states[i, data_episode.idxs[i], :] = self.env.state[i, :]
+                data_episode.actions[i, data_episode.idxs[i], :] = action[i, :]
+                data_episode.values[i, data_episode.idxs[i]] = value[i, 0]
+                data_episode.log_probs[i, data_episode.idxs[i]] = log_prob[i]
             
 
             # update the states
@@ -155,33 +157,33 @@ class PPO():
             for i in range(self.n_parallel):
 
                 # add the rewards to the episode buffer
-                data_episode.rewards[data_episode.idxs[i], i] = rewards[i]
+                data_episode.rewards[i, data_episode.idxs[i]] = rewards[i]
 
                 # check for the episode happening
                 if dones[i] or data_episode.idxs[i] == self.env.max_steps - 1:
                     # add a final 0 value
                     sz = data_episode.idxs[i] + 1
-                    data_episode.values[sz, i] = 0
+                    data_episode.values[i, sz] = 0
 
                     # calculate rewards to go
                     for j in range(sz):
-                        data_episode.rewards_to_go[j, i] = np.sum(data_episode.rewards[j:sz, i] * self.gamma_arr[:sz-j])
+                        data_episode.rewards_to_go[i, j] = np.sum(data_episode.rewards[i, j:sz] * self.gamma_arr[:sz-j])
 
                     # calculate the advantage estimates
-                    delta = data_episode.rewards[:sz, i] + self.gamma * data_episode.values[1:sz+1,i] - data_episode.values[:sz,i]
+                    delta = data_episode.rewards[i, :sz] + self.gamma * data_episode.values[i, 1:sz+1] - data_episode.values[i, :sz]
                     for j in range(sz):
-                        data_episode.advantages[j, i] = np.sum(delta[j:sz] * self.gamma_lam_arr[:sz-j])
+                        data_episode.advantages[i, j] = np.sum(delta[j:sz] * self.gamma_lam_arr[:sz-j])
 
                     # update the buffers
                     s = n
                     sz = min(sz, self.batch_size - n)
                     n += sz
-                    data_batch.states[s:n, :] = data_episode.states[:sz, i, :]
-                    data_batch.actions[s:n, :] = data_episode.actions[:sz, i, :]
-                    data_batch.log_probs[s:n] = data_episode.log_probs[:sz, i]
-                    data_batch.rewards_to_go[s:n] = data_episode.rewards_to_go[:sz, i]
-                    data_batch.advantages[s:n] = data_episode.advantages[:sz, i]
-                    data_batch.values[s:n] = data_episode.values[:sz,i]
+                    data_batch.states[s:n, :] = data_episode.states[i, :sz, :]
+                    data_batch.actions[s:n, :] = data_episode.actions[i, :sz, :]
+                    data_batch.log_probs[s:n] = data_episode.log_probs[i, :sz]
+                    data_batch.rewards_to_go[s:n] = data_episode.rewards_to_go[i, :sz]
+                    data_batch.advantages[s:n] = data_episode.advantages[i, :sz]
+                    data_batch.values[s:n] = data_episode.values[i, :sz]
 
                     # reset the episode index
                     data_episode.idxs[i] = 0
