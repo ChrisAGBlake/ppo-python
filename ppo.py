@@ -2,7 +2,7 @@ import time
 import torch
 import torch.nn as nn
 from torch.distributions.normal import Normal
-from cy_ppo import env_step, env_reset
+from cy_ppo import env_reset, update_state_and_buffers
 from config import *
 import numpy as np
 
@@ -82,9 +82,9 @@ class PPO():
         action = pi.sample()
         log_prob = self.actor.log_prob(pi, action)
         value = self.critic(state)
-        action = action.cpu()
-        log_prob = log_prob.cpu()
-        value = value.cpu()
+        action = action.cpu().numpy()
+        log_prob = log_prob.cpu().detach().numpy()
+        value = value.cpu().detach().numpy()
         return action, log_prob, value
 
     def get_batch(self):
@@ -105,10 +105,11 @@ class PPO():
         episode_rewards = np.zeros((n_parallel, max_steps), dtype=np.float32)
         episode_rewards_to_go = np.zeros((n_parallel, max_steps), dtype=np.float32)
         episode_advantages = np.zeros((n_parallel, max_steps), dtype=np.float32)
-        idxs = np.zeros(n_parallel, dtype=np.int)
+        idxs = np.zeros(n_parallel, dtype=np.int32)
         states = np.zeros((n_parallel, state_size), dtype=np.float32)
         rewards = np.zeros(n_parallel, dtype=np.float32)
         dones = np.zeros(n_parallel, dtype=np.int32)
+        delta = np.zeros(max_steps, dtype=np.float32)
 
         # reset the states
         for i in range(n_parallel):
@@ -119,62 +120,40 @@ class PPO():
         while n < batch_size:
 
             # normalise the states and add to the episode buffer of states
-            # not needed for this env
+            # N.B. not needed for this env
             
             # get the actions, log_prob and value estimates
-            action, log_prob, value = self.act(states)
+            actions, log_probs, values = self.act(states)
 
-            # add to the episode buffers
-            for i in range(n_parallel):
-                episode_states[i, idxs[i], :] = states[i, :]
-                episode_actions[i, idxs[i], :] = action[i, :]
-                episode_values[i, idxs[i]] = value[i, 0]
-                episode_log_probs[i, idxs[i]] = log_prob[i]
+            # update the state and buffers
+            n = update_state_and_buffers(
+                states, 
+                actions, 
+                rewards, 
+                dones, 
+                values,
+                log_probs,
+                episode_states, 
+                episode_actions, 
+                episode_values, 
+                episode_log_probs, 
+                episode_rewards,
+                episode_rewards_to_go,
+                episode_advantages,
+                batch_states, 
+                batch_actions, 
+                batch_values, 
+                batch_log_probs, 
+                batch_rewards_to_go,
+                batch_advantages,
+                delta,
+                gamma,
+                self.gamma_arr, 
+                self.gamma_lam_arr, 
+                idxs, 
+                n
+            )
             
-
-            # update the states
-            env_step(states, action.numpy(), rewards, dones)
-            for i in range(n_parallel):
-
-                # add the rewards to the episode buffer
-                episode_rewards[i, idxs[i]] = rewards[i]
-
-                # check for the episode happening
-                if dones[i] > 0 or idxs[i] == max_steps - 1:
-                    # add a final 0 value
-                    sz = idxs[i] + 1
-                    episode_values[i, sz] = 0
-
-                    # calculate rewards to go
-                    for j in range(sz):
-                        episode_rewards_to_go[i, j] = np.sum(episode_rewards[i, j:sz] * self.gamma_arr[:sz-j])
-
-                    # calculate the advantage estimates
-                    delta = episode_rewards[i, :sz] + gamma * episode_values[i, 1:sz+1] - episode_values[i, :sz]
-                    for j in range(sz):
-                        episode_advantages[i, j] = np.sum(delta[j:sz] * self.gamma_lam_arr[:sz-j])
-
-                    # update the buffers
-                    s = n
-                    sz = min(sz, batch_size - n)
-                    n += sz
-                    batch_states[s:n, :] = episode_states[i, :sz, :]
-                    batch_actions[s:n, :] = episode_actions[i, :sz, :]
-                    batch_log_probs[s:n] = episode_log_probs[i, :sz]
-                    batch_rewards_to_go[s:n] = episode_rewards_to_go[i, :sz]
-                    batch_advantages[s:n] = episode_advantages[i, :sz]
-                    batch_values[s:n] = episode_values[i, :sz]
-
-                    # reset the episode index
-                    idxs[i] = 0
-
-                    # reset this state
-                    env_reset(states[i,:])
-
-                else:
-                    idxs[i] += 1
-            
-
         # normalise the advantage estimates
         mu = np.mean(batch_advantages)
         sigma = np.std(batch_advantages)
