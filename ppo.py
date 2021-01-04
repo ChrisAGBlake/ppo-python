@@ -10,13 +10,21 @@ class Actor(nn.Module):
         super(Actor, self).__init__()
         self.l1 = nn.Linear(state_size, hidden_size)
         self.l2 = nn.Linear(hidden_size, hidden_size)
-        self.l3 = nn.Linear(hidden_size, action_size)
+        self.l3 = nn.Linear(hidden_size, hidden_size)
+        self.l4 = nn.Linear(hidden_size, hidden_size)
+        self.l5 = nn.Linear(hidden_size, hidden_size)
+        self.l6 = nn.Linear(hidden_size, hidden_size)
+        self.l7 = nn.Linear(hidden_size, action_size)
         self.log_std = nn.Parameter(-0.5 * torch.ones(action_size, dtype=torch.float32))
 
     def forward(self, x):
-        x = torch.tanh(self.l1(x))
-        x = torch.tanh(self.l2(x))
-        mu = self.l3(x)
+        x = torch.relu(self.l1(x))
+        x = torch.relu(self.l2(x))
+        x = torch.relu(self.l3(x))
+        x = torch.relu(self.l4(x))
+        x = torch.relu(self.l5(x))
+        x = torch.relu(self.l6(x))
+        mu = self.l7(x)
         return mu
 
     def dist(self, mu):
@@ -31,12 +39,20 @@ class Critic(nn.Module):
         super(Critic, self).__init__()
         self.l1 = nn.Linear(state_size, hidden_size)
         self.l2 = nn.Linear(hidden_size, hidden_size)
-        self.l3 = nn.Linear(hidden_size, 1) 
+        self.l3 = nn.Linear(hidden_size, hidden_size)
+        self.l4 = nn.Linear(hidden_size, hidden_size)
+        self.l5 = nn.Linear(hidden_size, hidden_size)
+        self.l6 = nn.Linear(hidden_size, hidden_size)
+        self.l7 = nn.Linear(hidden_size, 1)
 
     def forward(self, x):
-        x = torch.tanh(self.l1(x))
-        x = torch.tanh(self.l2(x))
-        x = self.l3(x)
+        x = torch.relu(self.l1(x))
+        x = torch.relu(self.l2(x))
+        x = torch.relu(self.l3(x))
+        x = torch.relu(self.l4(x))
+        x = torch.relu(self.l5(x))
+        x = torch.relu(self.l6(x))
+        x = self.l7(x)
         return x
 
 class Buffer():
@@ -48,7 +64,6 @@ class Buffer():
         self.rewards_to_go = np.zeros(size, dtype=np.float32)
         self.advantages = np.zeros(size, dtype=np.float32)
         self.values = np.zeros(size, dtype=np.float32)
-        self.rewards = np.zeros(size, dtype=np.float32)
 
     def normalise_advantages(self):
         mu = np.mean(self.advantages)
@@ -56,24 +71,36 @@ class Buffer():
         self.advantages = (self.advantages - mu) / sigma
         return
 
+class EpisodeBuffer():
+    def __init__(self, size, n_parallel, state_size, action_size):
+        self.size = size
+        self.states = np.zeros((size, n_parallel, state_size), dtype=np.float32)
+        self.actions = np.zeros((size, n_parallel, action_size), dtype=np.float32)
+        self.log_probs = np.zeros((size, n_parallel), dtype=np.float32)
+        self.values = np.zeros((size+1, n_parallel), dtype=np.float32)
+        self.rewards = np.zeros((size, n_parallel), dtype=np.float32)
+        self.rewards_to_go = np.zeros((size, n_parallel), dtype=np.float32)
+        self.advantages = np.zeros((size, n_parallel), dtype=np.float32)
+        self.idxs = np.zeros(n_parallel, dtype=np.int)
 class PPO():
 
     def __init__(self):
         # initialise variables
-        self.batch_size = 20000
+        self.batch_size = 2000
         self.lr = 1e-4
         self.gamma = 0.99
         self.lam = 0.95
-        self.n_actor_updates = 1
-        self.n_critic_updates = 1
+        self.n_actor_updates = 10
+        self.n_critic_updates = 10
         self.epsilon = 0.2
+        self.n_parallel = 100
 
         # setup the environment
-        self.env = Env()
+        self.env = Env(self.n_parallel)
 
         # setup actor critic nn models
-        self.actor = Actor(self.env.state_size, self.env.action_size, 256)
-        self.critic = Critic(self.env.state_size, 256)
+        self.actor = Actor(self.env.state_size, self.env.action_size, 256).cuda()
+        self.critic = Critic(self.env.state_size, 256).cuda()
 
         # setup gamm lambda arrays to speed up calculation of advantage estimates
         self.gamma_arr = np.zeros(self.env.max_steps, dtype=np.float32)
@@ -87,75 +114,84 @@ class PPO():
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), self.lr)
 
 
-    def episode(self, data):
-        
-        # reset the state
-        self.env.reset()
-
-        # run the episode
-        n_steps = self.env.max_steps
-        for i in range(self.env.max_steps):
-
-            # add state to the array of episode states
-            data.states[i, :] = self.env.state[:]
-
-            # get the action
-            mu = self.actor(torch.reshape(torch.from_numpy(self.env.state), (1,-1)))
-            pi = self.actor.dist(mu)
-            action = pi.sample()
-            log_prob = self.actor.log_prob(pi, action)
-
-            # add to the arrays of episode values
-            data.actions[i, :] = action.numpy()[:]
-            data.log_probs[i] = log_prob
-
-            # update the environment
-            reward, done = self.env.step(action)
-
-            # add the reward to the array of episode rewards
-            data.rewards[i] = reward
-
-            # check for the episode ending
-            if done:
-                n_steps = i+1
-                break
-
-        return n_steps
-
-
     def get_batch(self):
 
         # set up date buffers for the batch and for individual episodes
         data_batch = Buffer(self.batch_size, self.env.state_size, self.env.action_size)
-        data_episode = Buffer(self.env.max_steps, self.env.state_size, self.env.action_size)
+        data_episode = EpisodeBuffer(self.env.max_steps, self.n_parallel, self.env.state_size, self.env.action_size)
 
+        # reset the states
+        for i in range(self.n_parallel):
+            self.env.reset(i)
+
+        # collect a batch of data
         n = 0
         while n < self.batch_size:
 
-            # run an episode, sz is the number of states in the episode, not +1 for the extra value
-            sz = self.episode(data_episode)
+            # normalise the states and add to the episode buffer of states
+            # not needed for this env
+            
+            # get the actions, log_prob and value estimates
+            state = torch.from_numpy(self.env.state).cuda()
+            mu = self.actor(state)
+            pi = self.actor.dist(mu)
+            action = pi.sample()
+            log_prob = self.actor.log_prob(pi, action)
+            value = self.critic(state)
+            action = action.cpu()
+            log_prob = log_prob.cpu()
+            value = value.cpu()
 
-            # calculate the rewards to go
-            for i in range(sz):
-                data_episode.rewards_to_go[i] = np.sum(data_episode.rewards[i:sz] * self.gamma_arr[:sz-i])
+            # add to the episode buffers
+            for i in range(self.n_parallel):
+                data_episode.states[data_episode.idxs[i], i, :] = self.env.state[i, :]
+                data_episode.actions[data_episode.idxs[i], i, :] = action[i, :]
+                data_episode.values[data_episode.idxs[i], i] = value[i, 0]
+                data_episode.log_probs[data_episode.idxs[i], i] = log_prob[i]
+            
 
-            # calculate the advantage estimates
-            values = self.critic(torch.as_tensor(data_episode.states[:sz, :])).detach().numpy()
-            values = np.append(values, np.zeros((1,1), dtype=np.float32), axis=0)
-            delta = data_episode.rewards[:sz] + self.gamma * values[1:sz+1,0] - values[:sz,0]
-            for i in range(sz):
-                data_episode.advantages[i] = np.sum(delta[i:sz] * self.gamma_lam_arr[:sz-i])
+            # update the states
+            rewards, dones = self.env.step(action)
+            for i in range(self.n_parallel):
 
-            # update the batch data arrays
-            s = n
-            sz = min(sz, self.batch_size - n)
-            n += sz
-            data_batch.states[s:n, :] = data_episode.states[:sz, :]
-            data_batch.actions[s:n, :] = data_episode.actions[:sz, :]
-            data_batch.log_probs[s:n] = data_episode.log_probs[:sz]
-            data_batch.rewards_to_go[s:n] = data_episode.rewards_to_go[:sz]
-            data_batch.advantages[s:n] = data_episode.advantages[:sz]
-            data_batch.values[s:n] = values[:sz,0]
+                # add the rewards to the episode buffer
+                data_episode.rewards[data_episode.idxs[i], i] = rewards[i]
+
+                # check for the episode happening
+                if dones[i] or data_episode.idxs[i] == self.env.max_steps - 1:
+                    # add a final 0 value
+                    sz = data_episode.idxs[i] + 1
+                    data_episode.values[sz, i] = 0
+
+                    # calculate rewards to go
+                    for j in range(sz):
+                        data_episode.rewards_to_go[j, i] = np.sum(data_episode.rewards[j:sz, i] * self.gamma_arr[:sz-j])
+
+                    # calculate the advantage estimates
+                    delta = data_episode.rewards[:sz, i] + self.gamma * data_episode.values[1:sz+1,i] - data_episode.values[:sz,i]
+                    for j in range(sz):
+                        data_episode.advantages[j, i] = np.sum(delta[j:sz] * self.gamma_lam_arr[:sz-j])
+
+                    # update the buffers
+                    s = n
+                    sz = min(sz, self.batch_size - n)
+                    n += sz
+                    data_batch.states[s:n, :] = data_episode.states[:sz, i, :]
+                    data_batch.actions[s:n, :] = data_episode.actions[:sz, i, :]
+                    data_batch.log_probs[s:n] = data_episode.log_probs[:sz, i]
+                    data_batch.rewards_to_go[s:n] = data_episode.rewards_to_go[:sz, i]
+                    data_batch.advantages[s:n] = data_episode.advantages[:sz, i]
+                    data_batch.values[s:n] = data_episode.values[:sz,i]
+
+                    # reset the episode index
+                    data_episode.idxs[i] = 0
+
+                    # reset this state
+                    self.env.reset(i)
+
+                else:
+                     data_episode.idxs[i] += 1
+            
 
         # normalise the advantage estimates
         data_batch.normalise_advantages()
@@ -167,7 +203,6 @@ class PPO():
         data_batch.rewards_to_go = torch.as_tensor(data_batch.rewards_to_go)
         data_batch.advantages = torch.as_tensor(data_batch.advantages)
         data_batch.values = torch.as_tensor(data_batch.values)
-        data_batch.rewards = torch.as_tensor(data_batch.rewards)
 
         return data_batch
 
@@ -193,15 +228,13 @@ class PPO():
 
     def update(self, data):
 
-        # # shift to the gpu
-        # self.actor = self.actor.cuda()
-        # self.critic = self.critic.cuda()
-        # self.states = self.states.cuda()
-        # self.actions = self.actions.cuda()
-        # self.log_probs = self.log_probs.cuda()
-        # self.advantages = self.advantages.cuda()
-        # self.values = self.values.cuda()
-        # self.rewards_to_go = self.rewards_to_go.cuda()
+        # shift to the gpu
+        data.states = data.states.cuda()
+        data.actions = data.actions.cuda()
+        data.log_probs = data.log_probs.cuda()
+        data.advantages = data.advantages.cuda()
+        data.values = data.values.cuda()
+        data.rewards_to_go = data.rewards_to_go.cuda()
 
         # update the actor
         for i in range(self.n_actor_updates):
@@ -217,16 +250,6 @@ class PPO():
             loss_v.backward()
             self.critic_opt.step()
 
-        # # shift back to the cpu
-        # self.actor = self.actor.cpu()
-        # self.critic = self.critic.cpu()
-        # self.states = self.states.cpu()
-        # self.actions = self.actions.cpu()
-        # self.log_probs = self.log_probs.cpu()
-        # self.advantages = self.advantages.cpu()
-        # self.values = self.values.cpu()
-        # self.rewards_to_go = self.rewards_to_go.cpu()
-
         return
 
 
@@ -234,21 +257,25 @@ class PPO():
         
         updates_per_checkpoint = int(1e7 / self.batch_size)
         while True:
-            for i in range(updates_per_checkpoint):
-                st = time.time()
-
+            for _ in range(updates_per_checkpoint):
+                
                 # get a batch of data to train with
-                print("get batch")
+                st = time.time()
                 data = self.get_batch()
+                bt = time.time() - st
 
                 # update the actor critic networks
-                print("update")
+                st = time.time()
                 self.update(data)
+                ut = time.time() - st
 
-                print("batch update time: ", time.time() - st)
-            break
+                # timing for performance tracking
+                print(f"batch time: {bt}, update time: {ut}")
+            
             # checkpoint the model
+            
 
 if __name__ == "__main__":
     ppo = PPO()
     ppo.train()
+
